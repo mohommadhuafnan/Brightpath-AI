@@ -1,6 +1,5 @@
-import { getGeminiFlash } from "@/lib/ai/gemini"
+import { generateJSONWithOpenRouter } from "@/lib/ai/gemini"
 import { createClient } from "@/lib/supabase/server"
-import { generateText, Output } from "ai"
 import { NextRequest, NextResponse } from "next/server"
 import { z } from "zod"
 
@@ -37,10 +36,28 @@ export async function POST(request: NextRequest) {
 
     const skillsList = currentSkills.map((s: any) => `${s.skill_name} (${s.skill_level}%)`).join(", ")
 
-    const { output } = await generateText({
-      model: getGeminiFlash(),
-      output: Output.object({ schema: LearningPathSchema }),
-      prompt: `Create a detailed ${duration}-week learning path for someone wanting to become a ${targetRole}.
+    const schema = JSON.stringify({
+      weeks: [
+        {
+          week: "number",
+          title: "string",
+          description: "string",
+          topics: ["string"],
+          resources: [
+            {
+              title: "string",
+              type: "string",
+              url: "string",
+              duration: "string or null"
+            }
+          ],
+          milestones: ["string"]
+        }
+      ]
+    })
+
+    const jsonResponse = await generateJSONWithOpenRouter(
+      `Create a detailed ${duration}-week learning path for someone wanting to become a ${targetRole}.
 
 Current skill level: ${difficulty}
 Existing skills: ${skillsList || "None specified"}
@@ -48,25 +65,20 @@ Existing skills: ${skillsList || "None specified"}
 Generate a comprehensive learning plan with:
 - Weekly modules with clear titles and descriptions
 - 3-5 specific topics to cover each week
-- 2-4 learning resources per week (include real, popular learning resources like:
-  - Udemy, Coursera, edX, YouTube channels
-  - Documentation sites (MDN, official docs)
-  - Books and articles
-  - Practice platforms like LeetCode, HackerRank, Figma tutorials)
+- 2-4 learning resources per week (include real, popular learning resources)
 - 2-3 milestones/deliverables per week
 
-Make the progression logical, building from fundamentals to advanced topics.
-Include both technical skills and soft skills relevant to the role.
-Resources should have realistic URLs (you can use placeholder URLs like https://example.com/course-name if unsure).
+Make the progression logical, building from fundamentals to advanced topics.`,
+      schema
+    )
 
-The plan should be challenging but achievable for someone at the ${difficulty} level.`,
-    })
+    const output = JSON.parse(jsonResponse)
+    const validatedOutput = LearningPathSchema.parse(output)
 
-    if (!output) {
+    if (!validatedOutput?.weeks) {
       throw new Error("Failed to generate learning path")
     }
 
-    // Save to database
     const { data: learningPath, error } = await supabase
       .from("learning_paths")
       .insert({
@@ -76,14 +88,13 @@ The plan should be challenging but achievable for someone at the ${difficulty} l
         difficulty,
         current_week: 1,
         progress_percentage: 0,
-        plan_data: output,
+        plan_data: validatedOutput,
       })
       .select()
       .single()
 
     if (error) throw error
 
-    // Award XP for creating learning path
     await supabase.rpc("increment_xp", { user_id: user.id, xp_amount: 100 })
 
     return NextResponse.json({ success: true, learningPath })

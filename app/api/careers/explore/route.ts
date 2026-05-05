@@ -1,5 +1,4 @@
-import { getGeminiFlash } from "@/lib/ai/gemini"
-import { generateText, Output } from "ai"
+import { generateJSONWithOpenRouter } from "@/lib/ai/gemini"
 import { z } from "zod"
 
 const RoleInfoSchema = z.object({
@@ -24,10 +23,28 @@ export async function POST(req: Request) {
   try {
     const { role } = await req.json()
 
-    const result = await generateText({
-      model: getGeminiFlash(),
-      output: Output.object({ schema: RoleInfoSchema }),
-      prompt: `You are a career counselor with deep knowledge of the tech industry. Provide comprehensive information about the following role:
+    const schema = JSON.stringify({
+      title: "string",
+      description: "string",
+      salary_range: {
+        min: "number",
+        max: "number",
+        currency: "string"
+      },
+      required_skills: [
+        {
+          name: "string",
+          importance: "critical | important | nice-to-have"
+        }
+      ],
+      timeline_months: "number",
+      growth_outlook: "string",
+      daily_tasks: ["string"],
+      career_paths: ["string"]
+    })
+
+    const jsonResponse = await generateJSONWithOpenRouter(
+      `You are a career counselor with deep knowledge of the tech industry. Provide comprehensive information about the following role:
 
 ROLE: ${role}
 
@@ -40,10 +57,14 @@ Provide accurate, current information including:
 6. 5-6 typical daily tasks for someone in this role
 7. 4-5 potential career progression paths from this role
 
-Be realistic and accurate with salary and timeline estimates. Skills should be specific and actionable.`
-    })
+Be realistic and accurate with salary and timeline estimates. Skills should be specific and actionable.`,
+      schema
+    )
 
-    return Response.json({ roleInfo: result.output })
+    const output = JSON.parse(jsonResponse)
+    const validatedOutput = RoleInfoSchema.parse(output)
+
+    return Response.json({ roleInfo: validatedOutput })
   } catch (error) {
     console.error("Career exploration error:", error)
     return Response.json({ error: "Failed to explore role" }, { status: 500 })

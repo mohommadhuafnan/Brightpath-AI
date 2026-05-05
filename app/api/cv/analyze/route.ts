@@ -1,6 +1,5 @@
-import { getGeminiFlash } from "@/lib/ai/gemini"
+import { generateJSONWithOpenRouter } from "@/lib/ai/gemini"
 import { createClient } from "@/lib/supabase/server"
-import { generateText, Output } from "ai"
 import { NextRequest, NextResponse } from "next/server"
 import { z } from "zod"
 
@@ -29,17 +28,13 @@ async function extractTextFromFile(file: File): Promise<string> {
   const buffer = await file.arrayBuffer()
   const text = new TextDecoder().decode(buffer)
   
-  // For now, we'll handle text-based files directly
-  // In production, you'd use pdf-parse for PDFs, mammoth for DOCX, etc.
   if (file.type === "text/plain") {
     return text
   }
   
-  // For PDF/DOCX, we'll extract what we can from the raw text
-  // This is a simplified approach - in production use proper parsers
   const cleanedText = text
-    .replace(/[^\x20-\x7E\n\r\t]/g, " ") // Remove non-printable chars
-    .replace(/\s+/g, " ") // Normalize whitespace
+    .replace(/[^\x20-\x7E\n\r\t]/g, " ")
+    .replace(/\s+/g, " ")
     .trim()
   
   return cleanedText || "Could not extract text from file. Please upload a plain text or PDF file."
@@ -66,7 +61,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Extract text from file
     const cvText = await extractTextFromFile(file)
 
     if (cvText.length < 100) {
@@ -76,11 +70,31 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Analyze CV with Gemini
-    const { output } = await generateText({
-      model: getGeminiFlash(),
-      output: Output.object({ schema: CVAnalysisSchema }),
-      prompt: `You are an expert ATS (Applicant Tracking System) analyst and career coach. Analyze the following CV/resume and provide detailed feedback.
+    const schema = JSON.stringify({
+      ats_score: "number (0-100)",
+      summary: "string",
+      strengths: ["string"],
+      improvements: ["string"],
+      keywords: {
+        found: ["string"],
+        missing: ["string"],
+      },
+      sections: [
+        {
+          name: "string",
+          score: "number",
+          feedback: "string",
+        }
+      ],
+      formatting: {
+        score: "number",
+        issues: ["string"],
+      },
+      extracted_skills: ["string"],
+    })
+
+    const jsonResponse = await generateJSONWithOpenRouter(
+      `You are an expert ATS (Applicant Tracking System) analyst and career coach. Analyze the following CV/resume and provide detailed feedback.
 
 CV Content:
 ${cvText.substring(0, 8000)}
@@ -95,28 +109,27 @@ Analyze the CV and provide:
 7. Formatting assessment with any issues found
 8. List of technical and soft skills extracted from the CV
 
-Be specific and actionable in your feedback. Focus on helping the candidate improve their chances of passing ATS systems and impressing human recruiters.`,
-    })
+Be specific and actionable in your feedback.`,
+      schema
+    )
 
-    if (!output) {
-      throw new Error("Failed to analyze CV")
-    }
+    const output = JSON.parse(jsonResponse)
+    const validatedOutput = CVAnalysisSchema.parse(output)
 
-    // Save to database
     const { data: cvRecord, error: dbError } = await supabase
       .from("cvs")
       .insert({
         user_id: user.id,
         file_name: file.name,
         parsed_content: { raw_text: cvText.substring(0, 10000) },
-        ats_score: output.ats_score,
+        ats_score: validatedOutput.ats_score,
         analysis: {
-          summary: output.summary,
-          strengths: output.strengths,
-          improvements: output.improvements,
-          keywords: output.keywords,
-          sections: output.sections,
-          formatting: output.formatting,
+          summary: validatedOutput.summary,
+          strengths: validatedOutput.strengths,
+          improvements: validatedOutput.improvements,
+          keywords: validatedOutput.keywords,
+          sections: validatedOutput.sections,
+          formatting: validatedOutput.formatting,
         },
       })
       .select()
@@ -127,17 +140,15 @@ Be specific and actionable in your feedback. Focus on helping the candidate impr
       throw new Error("Failed to save CV analysis")
     }
 
-    // Save extracted skills
-    if (output.extracted_skills && output.extracted_skills.length > 0) {
-      const skillsToInsert = output.extracted_skills.map(skill => ({
+    if (validatedOutput.extracted_skills && validatedOutput.extracted_skills.length > 0) {
+      const skillsToInsert = validatedOutput.extracted_skills.map(skill => ({
         user_id: user.id,
         skill_name: skill,
-        skill_level: 50, // Default level, can be adjusted
+        skill_level: 50,
         category: "extracted",
         verified: false,
       }))
 
-      // Insert skills, ignoring duplicates
       await supabase
         .from("user_skills")
         .upsert(skillsToInsert, { 
@@ -146,13 +157,12 @@ Be specific and actionable in your feedback. Focus on helping the candidate impr
         })
     }
 
-    // Award XP for uploading CV
     await supabase.rpc("increment_xp", { user_id: user.id, xp_amount: 50 })
 
     return NextResponse.json({
       success: true,
       cv: cvRecord,
-      analysis: output,
+      analysis: validatedOutput,
     })
   } catch (error) {
     console.error("CV analysis error:", error)

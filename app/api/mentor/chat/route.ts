@@ -1,11 +1,5 @@
-import { getGeminiFlash } from "@/lib/ai/gemini"
+import { generateWithOpenRouter } from "@/lib/ai/gemini"
 import { createClient } from "@/lib/supabase/server"
-import {
-  consumeStream,
-  convertToModelMessages,
-  streamText,
-  UIMessage,
-} from "ai"
 
 export const maxDuration = 60
 
@@ -40,7 +34,7 @@ export async function POST(req: Request) {
   }
 
   const { messages, userContext }: { 
-    messages: UIMessage[]
+    messages: Array<{ role: "user" | "assistant"; content: string }>
     userContext?: {
       name: string
       skills: string[]
@@ -48,7 +42,6 @@ export async function POST(req: Request) {
     }
   } = await req.json()
 
-  // Build context-aware system prompt
   let contextualPrompt = SYSTEM_PROMPT
   
   if (userContext) {
@@ -60,19 +53,37 @@ export async function POST(req: Request) {
 Use this context to personalize your advice when relevant.`
   }
 
-  const result = streamText({
-    model: getGeminiFlash(),
-    system: contextualPrompt,
-    messages: await convertToModelMessages(messages),
-    abortSignal: req.signal,
+  // Build conversation history
+  const conversationHistory = messages.map((msg, idx) => {
+    const lastUserMessage = messages
+      .slice(0, idx + 1)
+      .reverse()
+      .find(m => m.role === "user")
+    
+    return {
+      role: msg.role,
+      content: msg.content
+    }
   })
 
-  return result.toUIMessageStreamResponse({
-    originalMessages: messages,
-    onFinish: async ({ messages: allMessages, isAborted }) => {
-      if (isAborted) return
-      // Could save chat history here if needed
-    },
-    consumeSseStream: consumeStream,
-  })
+  // Get the last user message
+  const lastUserMsg = conversationHistory.reverse().find(m => m.role === "user")
+  if (!lastUserMsg) {
+    return new Response("No user message provided", { status: 400 })
+  }
+
+  try {
+    const response = await generateWithOpenRouter(
+      `${contextualPrompt}\n\nUser: ${lastUserMsg.content}`,
+    )
+
+    return new Response(JSON.stringify({ response }), {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    })
+  } catch (error) {
+    console.error("Mentor chat error:", error)
+    return new Response("Failed to generate response", { status: 500 })
+  }
 }

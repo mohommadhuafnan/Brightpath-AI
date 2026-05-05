@@ -1,6 +1,5 @@
-import { getGeminiFlash } from "@/lib/ai/gemini"
+import { generateJSONWithOpenRouter } from "@/lib/ai/gemini"
 import { createClient } from "@/lib/supabase/server"
-import { generateText, Output } from "ai"
 import { NextRequest, NextResponse } from "next/server"
 import { z } from "zod"
 
@@ -23,10 +22,18 @@ export async function POST(request: NextRequest) {
 
     const { roleType, difficulty, skills } = await request.json()
 
-    const { output } = await generateText({
-      model: getGeminiFlash(),
-      output: Output.object({ schema: QuestionsSchema }),
-      prompt: `Generate 5 interview questions for a ${difficulty} level ${roleType} position.
+    const schema = JSON.stringify({
+      questions: [
+        {
+          id: "number",
+          text: "string",
+          type: "behavioral | technical | situational"
+        }
+      ]
+    })
+
+    const jsonResponse = await generateJSONWithOpenRouter(
+      `Generate 5 interview questions for a ${difficulty} level ${roleType} position.
 
 The candidate has these skills: ${skills.join(", ") || "not specified"}
 
@@ -39,13 +46,17 @@ Make questions challenging but appropriate for the ${difficulty} level.
 Questions should be realistic and commonly asked in actual interviews.
 
 Return exactly 5 questions with their types.`,
-    })
+      schema
+    )
 
-    if (!output) {
+    const output = JSON.parse(jsonResponse)
+    const validatedOutput = QuestionsSchema.parse(output)
+
+    if (!validatedOutput?.questions) {
       throw new Error("Failed to generate questions")
     }
 
-    return NextResponse.json(output)
+    return NextResponse.json(validatedOutput)
   } catch (error) {
     console.error("Interview start error:", error)
     return NextResponse.json(

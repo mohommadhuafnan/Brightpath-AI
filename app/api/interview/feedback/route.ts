@@ -1,6 +1,5 @@
-import { getGeminiFlash } from "@/lib/ai/gemini"
+import { generateJSONWithOpenRouter } from "@/lib/ai/gemini"
 import { createClient } from "@/lib/supabase/server"
-import { generateText, Output } from "ai"
 import { NextRequest, NextResponse } from "next/server"
 import { z } from "zod"
 
@@ -22,10 +21,15 @@ export async function POST(request: NextRequest) {
 
     const { question, answer, roleType, difficulty } = await request.json()
 
-    const { output } = await generateText({
-      model: getGeminiFlash(),
-      output: Output.object({ schema: FeedbackSchema }),
-      prompt: `You are an expert interview coach evaluating a candidate's response.
+    const schema = JSON.stringify({
+      score: "number (0-100)",
+      strengths: ["string"],
+      improvements: ["string"],
+      tips: "string"
+    })
+
+    const jsonResponse = await generateJSONWithOpenRouter(
+      `You are an expert interview coach evaluating a candidate's response.
 
 Role: ${roleType}
 Level: ${difficulty}
@@ -50,13 +54,17 @@ Evaluate the response and provide:
 4. One actionable tip to improve future responses
 
 Be constructive and encouraging while being honest about areas to improve.`,
-    })
+      schema
+    )
 
-    if (!output) {
+    const output = JSON.parse(jsonResponse)
+    const validatedOutput = FeedbackSchema.parse(output)
+
+    if (!validatedOutput) {
       throw new Error("Failed to generate feedback")
     }
 
-    return NextResponse.json(output)
+    return NextResponse.json(validatedOutput)
   } catch (error) {
     console.error("Interview feedback error:", error)
     return NextResponse.json(

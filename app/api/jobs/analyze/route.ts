@@ -1,5 +1,4 @@
-import { getGeminiFlash } from "@/lib/ai/gemini"
-import { generateText, Output } from "ai"
+import { generateJSONWithOpenRouter } from "@/lib/ai/gemini"
 import { z } from "zod"
 import { createClient } from "@/lib/supabase/server"
 
@@ -17,13 +16,11 @@ export async function POST(req: Request) {
     const { targetRole } = await req.json()
     const supabase = await createClient()
 
-    // Get current user
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) {
       return Response.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Fetch user's skills
     const { data: userSkills } = await supabase
       .from("user_skills")
       .select("skill_name, skill_level")
@@ -33,11 +30,19 @@ export async function POST(req: Request) {
       ? `User's current skills: ${userSkills.map(s => `${s.skill_name} (${s.skill_level}%)`).join(", ")}`
       : "User has not added any skills yet"
 
-    // Generate job matches using AI
-    const result = await generateText({
-      model: getGeminiFlash(),
-      output: Output.object({ schema: JobMatchesSchema }),
-      prompt: `You are a job market expert. Generate 6 realistic job postings for the following role:
+    const schema = JSON.stringify({
+      jobs: [
+        {
+          job_title: "string",
+          company: "string",
+          description: "string",
+          required_skills: ["string"]
+        }
+      ]
+    })
+
+    const jsonResponse = await generateJSONWithOpenRouter(
+      `You are a job market expert. Generate 6 realistic job postings for the following role:
 
 TARGET ROLE: ${targetRole}
 
@@ -49,22 +54,20 @@ For each job, provide:
 3. A brief job description (2-3 sentences)
 4. List of 6-8 required skills (specific technologies, tools, and soft skills)
 
-Make the jobs varied in:
-- Seniority level (some junior, some mid, some senior)
-- Company type (startup, big tech, agency, etc.)
-- Specific focus within the role
+Make the jobs varied in seniority level and company type.`,
+      schema
+    )
 
-Be realistic with skill requirements that match current job market demands in 2024.`
-    })
+    const output = JSON.parse(jsonResponse)
+    const validatedOutput = JobMatchesSchema.parse(output)
 
-    if (!result.output?.jobs) {
+    if (!validatedOutput?.jobs) {
       return Response.json({ error: "Failed to generate jobs" }, { status: 500 })
     }
 
-    // Calculate match scores and skill gaps
     const userSkillNames = userSkills?.map(s => s.skill_name.toLowerCase()) || []
 
-    const jobsToInsert = result.output.jobs.map(job => {
+    const jobsToInsert = validatedOutput.jobs.map(job => {
       const requiredSkillsLower = job.required_skills.map(s => s.toLowerCase())
       const matchedSkills = requiredSkillsLower.filter(skill => 
         userSkillNames.some(us => us.includes(skill) || skill.includes(us))
@@ -87,7 +90,6 @@ Be realistic with skill requirements that match current job market demands in 20
       }
     })
 
-    // Insert jobs into database
     const { error } = await supabase
       .from("job_matches")
       .insert(jobsToInsert)

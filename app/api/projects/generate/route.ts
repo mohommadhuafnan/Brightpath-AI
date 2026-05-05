@@ -1,5 +1,4 @@
-import { getGeminiFlash } from "@/lib/ai/gemini"
-import { generateText, Output } from "ai"
+import { generateJSONWithOpenRouter } from "@/lib/ai/gemini"
 import { z } from "zod"
 
 const ProjectSpecSchema = z.object({
@@ -34,10 +33,30 @@ export async function POST(req: Request) {
       advanced: "Complex architecture, 10+ features, real-time functionality, caching, advanced patterns, microservices consideration"
     }
 
-    const result = await generateText({
-      model: getGeminiFlash(),
-      output: Output.object({ schema: ProjectSpecSchema }),
-      prompt: `You are a senior software architect. Generate a complete project specification for the following idea.
+    const schema = JSON.stringify({
+      title: "string",
+      description: "string",
+      tech_stack: ["string"],
+      features: ["string"],
+      api_structure: [
+        {
+          method: "string (GET/POST/PUT/DELETE)",
+          endpoint: "string",
+          description: "string"
+        }
+      ],
+      database_schema: [
+        {
+          table: "string",
+          columns: ["string (column_name type constraints)"]
+        }
+      ],
+      readme_template: "string (markdown format)",
+      wireframe_description: "string"
+    })
+
+    const jsonResponse = await generateJSONWithOpenRouter(
+      `You are a senior software architect. Generate a complete project specification for the following idea.
 
 PROJECT IDEA: ${idea}
 
@@ -52,14 +71,18 @@ Generate a comprehensive project specification including:
 3. Complete tech stack (frontend, backend, database, tools)
 4. List of features (appropriate for difficulty level)
 5. RESTful API structure with all endpoints needed
-6. Database schema with table names and columns (include types like "id UUID PRIMARY KEY", "name VARCHAR(255)", etc.)
-7. A complete README.md template with sections: Overview, Features, Tech Stack, Getting Started, API Documentation, Database Schema, Contributing
-8. UI wireframe description explaining the main screens and layout
+6. Database schema with table names and columns
+7. A complete README.md template
+8. UI wireframe description
 
-Make the project realistic and implementable. Focus on best practices and modern development patterns.`
-    })
+Make the project realistic and implementable.`,
+      schema
+    )
 
-    return Response.json({ spec: result.output })
+    const output = JSON.parse(jsonResponse)
+    const validatedOutput = ProjectSpecSchema.parse(output)
+
+    return Response.json({ spec: validatedOutput })
   } catch (error) {
     console.error("Project generation error:", error)
     return Response.json({ error: "Failed to generate project" }, { status: 500 })
